@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 const BASE_STATS = {
   totalRounds: 1218, latestRound: 1218,
   allFreq: {1:167,2:152,3:171,4:159,5:153,6:163,7:168,8:156,9:133,10:161,11:164,12:177,13:175,14:170,15:166,16:166,17:169,18:172,19:167,20:168,21:165,22:141,23:147,24:164,25:150,26:164,27:180,28:152,29:153,30:156,31:166,32:142,33:173,34:181,35:161,36:162,37:171,38:169,39:165,40:172,41:147,42:154,43:162,44:161,45:173},
+  twFreq: {1:167,2:152,3:171,4:159,5:153,6:163,7:168,8:156,9:133,10:161,11:164,12:177,13:175,14:170,15:166,16:166,17:169,18:172,19:167,20:168,21:165,22:141,23:147,24:164,25:150,26:164,27:180,28:152,29:153,30:156,31:166,32:142,33:173,34:181,35:161,36:162,37:171,38:169,39:165,40:172,41:147,42:154,43:162,44:161,45:173},
   r50Freq: {1:8,2:3,3:12,4:6,5:8,6:8,7:8,8:8,9:7,10:6,11:6,12:7,13:6,14:4,15:9,16:10,17:7,18:4,19:7,20:6,21:4,22:3,23:8,24:9,25:5,26:7,27:12,28:8,29:6,30:7,31:8,32:5,33:6,34:2,35:7,36:7,37:7,38:8,39:6,40:8,41:6,42:7,43:3,44:6,45:5},
   r20Freq: {1:4,2:2,3:4,4:2,5:3,6:2,7:2,8:3,9:2,10:4,11:1,12:1,13:1,14:1,15:4,16:4,17:3,18:1,19:2,20:3,21:2,22:1,23:3,24:4,25:3,26:2,27:8,28:2,29:2,30:4,31:6,32:3,33:2,34:0,35:4,36:3,37:2,38:5,39:2,40:2,41:2,42:3,43:0,44:3,45:3},
   cold: {1:8,2:9,3:0,4:13,5:5,6:10,7:8,8:1,9:8,10:1,11:5,12:16,13:3,14:2,15:1,16:13,17:8,18:15,19:3,20:1,21:3,22:11,23:2,24:2,25:5,26:7,27:4,28:0,29:1,30:4,31:0,32:0,33:4,34:23,35:7,36:5,37:9,38:5,39:9,40:7,41:6,42:0,43:21,44:3,45:0},
@@ -21,31 +22,42 @@ const BASE_STATS = {
   stats: { sumMean: 138.2, sumStd: 30.8 },
 };
 
-// ── API 호출 (자체 Vercel proxy → 외부 proxy 순서) ──
+// ── API 호출 (Vercel 서버사이드 프록시 → 로컬 Vite 프록시 동일 경로) ──
 async function fetchRound(round) {
-  const dhUrl = `https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo=${round}`;
-  const targets = [
-    () => fetch(`/api/lotto?round=${round}`, { signal: AbortSignal.timeout(4000) }),
-    () => fetch(`https://corsproxy.io/?${encodeURIComponent(dhUrl)}`, { signal: AbortSignal.timeout(4000) }),
-    () => fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(dhUrl)}`, { signal: AbortSignal.timeout(4000) }),
-  ];
-  for (const t of targets) {
-    try {
-      const res = await t();
-      if (!res.ok) continue;
-      const d = await res.json();
-      if (d.returnValue === "success") return {
-        r: d.drwNo,
-        n: [d.drwtNo1,d.drwtNo2,d.drwtNo3,d.drwtNo4,d.drwtNo5,d.drwtNo6].sort((a,b)=>a-b),
-        b: d.bnusNo, date: d.drwNoDate,
-      };
-    } catch { continue; }
-  }
-  return null;
+  try {
+    const res = await fetch(`/api/lotto?round=${round}`, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
+    const d = await res.json();
+    if (d.returnValue !== 'success') return null;
+    return {
+      r: d.drwNo,
+      n: [d.drwtNo1,d.drwtNo2,d.drwtNo3,d.drwtNo4,d.drwtNo5,d.drwtNo6].sort((a,b)=>a-b),
+      b: d.bnusNo, date: d.drwNoDate,
+    };
+  } catch { return null; }
 }
 
 function estimateLatest() {
   return Math.floor((Date.now() - new Date(2002,11,7)) / (7*24*60*60*1000)) + 1;
+}
+
+// ── localStorage 캐시 (주 1회 추첨이므로 새 회차 나올 때만 갱신) ──
+const CACHE_KEY = 'lotto_cache_v2';
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const { data } = JSON.parse(raw);
+    if (!data?.latestRound) return null;
+    return data;
+  } catch { return null; }
+}
+
+function saveCache(data) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ data, savedAt: Date.now() }));
+  } catch {}
 }
 
 // 병렬 배치로 N회차 가져오기
@@ -53,6 +65,39 @@ async function fetchBatch(startRound, count) {
   const rounds = Array.from({length: count}, (_, i) => startRound - i).filter(r => r >= 1);
   const results = await Promise.all(rounds.map(r => fetchRound(r)));
   return results.filter(Boolean).sort((a,b) => b.r - a.r);
+}
+
+// ── 지수 감쇠 시간 가중 빈도 계산 (반감기 52회 ≈ 1년) ──
+function calcTWFreq(freshRounds, base) {
+  const lambda = Math.LN2 / 52;
+  if (!freshRounds?.length) {
+    const tot = Object.values(base.allFreq).reduce((s,v)=>s+v,0);
+    const tw = {};
+    for (let i=1;i<=45;i++) tw[i] = tot>0 ? (base.allFreq[i]||0)/tot : 1/45;
+    return tw;
+  }
+  const latest = freshRounds[0].r;
+  const oldest = freshRounds[freshRounds.length-1].r;
+  const tw = {};
+  for (let i=1;i<=45;i++) tw[i] = 0;
+
+  for (const rd of freshRounds) {
+    const w = Math.exp(-lambda * (latest - rd.r));
+    for (const n of rd.n) tw[n] += w;
+  }
+
+  if (oldest > 1) {
+    const fetchedFreq = {};
+    for (let i=1;i<=45;i++) fetchedFreq[i] = 0;
+    for (const rd of freshRounds) for (const n of rd.n) fetchedFreq[n]++;
+    const avgHistAge = latest - (oldest - 1) / 2;
+    const histW = Math.exp(-lambda * avgHistAge);
+    for (let i=1;i<=45;i++) {
+      const histCount = Math.max(0, (base.allFreq[i]||0) - fetchedFreq[i]);
+      tw[i] += histCount * histW;
+    }
+  }
+  return tw;
 }
 
 // 새로 가져온 회차로 recentRounds + cold + r20Freq 만 업데이트
@@ -86,12 +131,14 @@ function mergeRecent(base, freshRounds) {
   const topPairs = Object.entries(pairCount).sort((a,b)=>b[1]-a[1]).slice(0,13)
     .map(([k,c]) => { const [a,b]=k.split("-").map(Number); return {a,b,c}; });
 
+  const twFreq = calcTWFreq(freshRounds, base);
+
   return {
     ...base,
     latestRound: latest,
     totalRounds: Math.max(base.totalRounds, freshRounds.length),
     recentRounds: freshRounds.slice(0, 15),
-    r20Freq, r50Freq, cold, topPairs,
+    r20Freq, r50Freq, cold, topPairs, twFreq,
   };
 }
 
@@ -173,9 +220,15 @@ function analyze(sel, stats) {
 
 function smartPick(DATA) {
   if (!DATA) return [];
+  const twFreq = DATA.twFreq || DATA.allFreq;
+  const cold = DATA.cold;
+  const twTotal = Object.values(twFreq).reduce((s,v)=>s+v,0);
   const w = {};
-  for (let i=1;i<=45;i++)
-    w[i] = (DATA.allFreq[i]||0)/DATA.totalRounds*0.2 + (DATA.r50Freq[i]||0)/50*0.3 + (DATA.r20Freq[i]||0)/20*0.35 + Math.min((DATA.cold[i]||0)/20,1)*0.15;
+  for (let i=1;i<=45;i++) {
+    const tw = twTotal > 0 ? (twFreq[i]||0)/twTotal : 1/45;
+    const coldBonus = Math.min((cold[i]||0)/20, 1);
+    w[i] = tw * 0.85 + coldBonus * 0.15;
+  }
   const e = Object.entries(w).map(([k,v])=>[+k,v]);
   const tot = e.reduce((s,[,v])=>s+v,0);
   let ps = new Set(), att = 0;
@@ -198,6 +251,8 @@ function StatusBadge({ status, round }) {
     loading:  { bg:"rgba(99,102,241,0.15)",  color:"#818CF8", text:"⟳ 최신화 중..." },
     bg:       { bg:"rgba(99,102,241,0.08)",  color:"#6366F1", text:"⟳ 통계 보강 중..." },
     done:     { bg:"rgba(16,185,129,0.12)",  color:"#10B981", text:`✓ ${round}회차 최신화 완료` },
+    cached:   { bg:"rgba(16,185,129,0.08)",  color:"#6EE7B7", text:`✓ ${round}회차 저장 데이터 사용 중` },
+    base:     { bg:"rgba(107,114,128,0.1)",  color:"#9CA3AF", text:"ℹ 내장 기본 데이터 사용 중 · 연결 시 자동 갱신" },
     error:    { bg:"rgba(239,68,68,0.1)",    color:"#F87171", text:"⚠ 네트워크 오류 · 내장 데이터 사용 중" },
   }[status] || {};
   return (
@@ -214,28 +269,47 @@ export default function App() {
   const [guide, setGuide]   = useState(false);
   const [anim, setAnim]     = useState(false);
   const [saved, setSaved]   = useState([]);
-  const [DATA, setDATA]     = useState(BASE_STATS);
-  const [status, setStatus] = useState("idle"); // idle | loading | bg | done | error
+  const [DATA, setDATA]     = useState(() => loadCache() || BASE_STATS);
+  const [status, setStatus] = useState("idle"); // idle | loading | bg | done | cached | error
   const abortRef            = useRef(null);
 
   useEffect(() => { doUpdate(); return () => abortRef.current?.abort(); }, []);
 
-  async function doUpdate() {
+  async function doUpdate(force = false) {
     if (abortRef.current) abortRef.current.abort();
+
+    // ── 캐시 확인: 저장된 회차가 현재 추정 최신 회차와 같으면 네트워크 불필요 ──
+    const cached = loadCache();
+    const estimated = estimateLatest();
+    if (!force && cached && cached.latestRound >= estimated - 1) {
+      setDATA(cached);
+      setStatus("cached");
+      return;
+    }
+
     setStatus("loading");
 
-    // ── 1단계: 최신 회차 탐색 후 20회차 즉시 로드 (~2-3초) ──
-    let latest = estimateLatest();
+    // ── 1단계: 최신 회차 탐색 후 20회차 즉시 로드 ──
+    let latest = estimated;
     let first = null;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       first = await fetchRound(latest - i);
       if (first) { latest = latest - i; break; }
     }
-    if (!first) { setStatus("error"); return; }
+    if (!first) {
+      // 네트워크 실패 시 캐시 또는 내장 데이터로 소프트 폴백
+      if (cached) { setDATA(cached); setStatus("cached"); }
+      else { setStatus("base"); }
+      return;
+    }
 
     const fast = await fetchBatch(latest, 20);
     if (fast.length > 0) {
-      setDATA(prev => mergeRecent(prev, fast));
+      setDATA(prev => {
+        const merged = mergeRecent(prev, fast);
+        saveCache(merged);
+        return merged;
+      });
       setStatus("done");
     }
 
@@ -244,7 +318,11 @@ export default function App() {
     const extra = await fetchBatch(latest - 20, 80);
     const all = [...fast, ...extra].sort((a,b)=>b.r-a.r);
     if (all.length > 20) {
-      setDATA(prev => mergeRecent(prev, all));
+      setDATA(prev => {
+        const merged = mergeRecent(prev, all);
+        saveCache(merged);
+        return merged;
+      });
     }
     setStatus("done");
   }
@@ -255,6 +333,11 @@ export default function App() {
 
   const an  = useMemo(() => analyze(sel, DATA?.stats), [sel, DATA]);
   const fd  = useMemo(() => {
+    if (fMode === "tw") {
+      const vals = Object.entries(DATA.twFreq||{}).map(([k,v])=>({num:+k,raw:v}));
+      const maxVal = Math.max(...vals.map(v=>v.raw), 1);
+      return vals.map(({num,raw})=>({num, value: Math.round((raw/maxVal)*999)+1}));
+    }
     const d = fMode==="all" ? DATA.allFreq : fMode==="r50" ? DATA.r50Freq : DATA.r20Freq;
     return Object.entries(d).map(([k,v]) => ({num:+k, value:v}));
   }, [fMode, DATA]);
@@ -279,9 +362,9 @@ export default function App() {
                 1~{DATA.latestRound}회 · {DATA.totalRounds}회차 통계 기반
               </p>
             </div>
-            <button onClick={doUpdate} disabled={status==="loading"||status==="bg"} style={{ padding:"5px 10px", borderRadius:14, border:"1px solid rgba(99,102,241,0.3)", background:"rgba(99,102,241,0.15)", color:"#818CF8", fontSize:10, fontWeight:700, cursor:(status==="loading"||status==="bg")?"wait":"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:3 }}>
+            <button onClick={() => doUpdate(status==="cached")} disabled={status==="loading"||status==="bg"} style={{ padding:"5px 10px", borderRadius:14, border:"1px solid rgba(99,102,241,0.3)", background:"rgba(99,102,241,0.15)", color:"#818CF8", fontSize:10, fontWeight:700, cursor:(status==="loading"||status==="bg")?"wait":"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:3 }}>
               <span style={{ display:"inline-block", animation:(status==="loading"||status==="bg")?"spin 1s linear infinite":"none", fontSize:12 }}>🔄</span>
-              {status==="loading"||status==="bg" ? "갱신중" : "최신화"}
+              {status==="loading"||status==="bg" ? "갱신중" : status==="cached" ? "강제갱신" : "최신화"}
             </button>
           </div>
 
@@ -368,7 +451,7 @@ export default function App() {
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, flexWrap:"wrap", gap:6 }}>
             <span style={{ fontSize:13, fontWeight:700 }}>📊 출현 빈도</span>
             <div style={{ display:"flex", gap:3 }}>
-              {[{id:"all",l:"전체"},{id:"r50",l:"50회"},{id:"r20",l:"20회"}].map(m=><button key={m.id} onClick={()=>setFMode(m.id)} style={{ padding:"4px 8px", borderRadius:10, border:"none", background:fMode===m.id?"#F59E0B":"#1F2937", color:fMode===m.id?"#000":"#9CA3AF", fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{m.l}</button>)}
+              {[{id:"all",l:"전체"},{id:"r50",l:"50회"},{id:"r20",l:"20회"},{id:"tw",l:"가중"}].map(m=><button key={m.id} onClick={()=>setFMode(m.id)} style={{ padding:"4px 8px", borderRadius:10, border:"none", background:fMode===m.id?(m.id==="tw"?"#818CF8":"#F59E0B"):"#1F2937", color:fMode===m.id?"#000":"#9CA3AF", fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{m.l}</button>)}
             </div>
           </div>
           <div style={{ display:"flex", flexDirection:"column", gap:1 }}>
