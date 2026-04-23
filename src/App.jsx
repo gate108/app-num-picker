@@ -60,6 +60,20 @@ function saveCache(data) {
   } catch {}
 }
 
+// 서버의 manualRounds를 BASE_STATS에 적용하여 통계 재계산
+function applyManual(base, manualRounds) {
+  if (!manualRounds?.length) return base;
+  const sorted = [...manualRounds].sort((a,b)=>b.r-a.r);
+  const allFreq = { ...base.allFreq };
+  for (const rd of sorted) for (const x of rd.n) allFreq[x] = (allFreq[x]||0) + 1;
+  const seen = new Set(sorted.map(x => x.r));
+  const baseRecent = (base.recentRounds || []).filter(x => !seen.has(x.r));
+  return mergeRecent(
+    { ...base, allFreq, totalRounds: (base.totalRounds||0) + sorted.length },
+    [...sorted, ...baseRecent].sort((a,b)=>b.r-a.r),
+  );
+}
+
 // 병렬 배치로 N회차 가져오기
 async function fetchBatch(startRound, count) {
   const rounds = Array.from({length: count}, (_, i) => startRound - i).filter(r => r >= 1);
@@ -272,10 +286,42 @@ export default function App() {
   const [DATA, setDATA]     = useState(() => loadCache() || BASE_STATS);
   const [status, setStatus] = useState("idle"); // idle | loading | bg | done | cached | error
   const abortRef            = useRef(null);
-  const [mForm, setMForm]   = useState(() => ({ r:"", n:["","","","","",""], b:"", date:"" }));
-  const [mErr, setMErr]     = useState("");
+  const [mForm, setMForm]      = useState(() => ({ r:"", n:["","","","","",""], b:"", date:"" }));
+  const [mErr, setMErr]        = useState("");
+  const [mBusy, setMBusy]      = useState(false);
+  const [editing, setEditing]  = useState(null); // 수정 중인 회차 번호
+  const [manualRounds, setManualRounds] = useState([]);
+  const [adminToken, setAdminToken]     = useState(() => { try { return localStorage.getItem('lotto_admin_token') || ''; } catch { return ''; } });
 
-  function addManualRound() {
+  function saveToken(t) {
+    setAdminToken(t);
+    try { localStorage.setItem('lotto_admin_token', t); } catch {}
+  }
+
+  async function submitManual(action, payload) {
+    setMErr("");
+    if (!adminToken) { setMErr("관리자 토큰을 먼저 입력하세요"); return; }
+    setMBusy(true);
+    try {
+      const res = await fetch('/api/data', {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', Authorization: `Bearer ${adminToken}` },
+        body: JSON.stringify({ action, ...payload }),
+      });
+      const data = await res.json();
+      if (!res.ok) { setMErr(data.error || '저장 실패'); return; }
+      setManualRounds(data.manualRounds);
+      const next = applyManual(BASE_STATS, data.manualRounds);
+      setDATA(next);
+      saveCache(next);
+      setMForm({ r:"", n:["","","","","",""], b:"", date:"" });
+      setEditing(null);
+    } catch (e) {
+      setMErr(e?.message || '네트워크 오류');
+    } finally { setMBusy(false); }
+  }
+
+  function addOrUpdateManualRound() {
     setMErr("");
     const r = parseInt(mForm.r, 10);
     const nums = mForm.n.map(x => parseInt(x, 10));
@@ -286,27 +332,40 @@ export default function App() {
     if (new Set(nums).size !== 6) return setMErr("당첨번호 6개가 중복되었습니다");
     if (!b || b < 1 || b > 45 || nums.includes(b)) return setMErr("보너스 번호 확인");
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return setMErr("날짜 YYYY-MM-DD 형식");
-
-    setDATA(prev => {
-      const sorted = [...nums].sort((a,b)=>a-b);
-      const newRd = { r, n: sorted, b, date };
-      const exists = prev.recentRounds.some(x => x.r === r);
-      if (exists) { setMErr(`${r}회는 이미 입력됨`); return prev; }
-
-      const allFreq = { ...prev.allFreq };
-      for (const x of sorted) allFreq[x] = (allFreq[x]||0) + 1;
-
-      const merged = mergeRecent(
-        { ...prev, allFreq, totalRounds: (prev.totalRounds||0) + 1 },
-        [newRd, ...prev.recentRounds].sort((a,b)=>b.r-a.r),
-      );
-      saveCache(merged);
-      return merged;
-    });
-    setMForm({ r:"", n:["","","","","",""], b:"", date:"" });
+    const sorted = [...nums].sort((a,b)=>a-b);
+    submitManual(editing != null ? 'update' : 'add', { round: { r, n: sorted, b, date } });
   }
 
-  useEffect(() => { doUpdate(); return () => abortRef.current?.abort(); }, []);
+  function startEdit(rd) {
+    setEditing(rd.r);
+    setMForm({ r: String(rd.r), n: rd.n.map(String), b: String(rd.b), date: rd.date });
+    setMErr("");
+  }
+
+  function cancelEdit() {
+    setEditing(null);
+    setMForm({ r:"", n:["","","","","",""], b:"", date:"" });
+    setMErr("");
+  }
+
+  function deleteManualRound(r) {
+    if (!confirm(`${r}회를 삭제하시겠습니까?`)) return;
+    submitManual('delete', { r });
+  }
+
+  useEffect(() => {
+    fetch('/api/data').then(r=>r.json()).then(d => {
+      const list = Array.isArray(d?.manualRounds) ? d.manualRounds : [];
+      setManualRounds(list);
+      if (list.length > 0) {
+        const next = applyManual(BASE_STATS, list);
+        setDATA(next);
+        saveCache(next);
+      }
+    }).catch(()=>{});
+    doUpdate();
+    return () => abortRef.current?.abort();
+  }, []);
 
   async function doUpdate(force = false) {
     if (abortRef.current) abortRef.current.abort();
@@ -522,12 +581,16 @@ export default function App() {
             {DATA.recentRounds[0]?.date && <span style={{ fontSize:10, color:"#6B7280" }}>{DATA.recentRounds[0].date} 기준</span>}
           </div>
 
-          {/* 수동 입력 폼 */}
+          {/* 수동 입력 폼 (서버 공유 저장) */}
           <div style={{ padding:10, background:"#0F172A", borderRadius:8, marginBottom:10, border:"1px solid rgba(99,102,241,0.2)" }}>
-            <div style={{ fontSize:11, fontWeight:700, color:"#818CF8", marginBottom:8 }}>✍ 새 회차 직접 입력</div>
+            <div style={{ fontSize:11, fontWeight:700, color:"#818CF8", marginBottom:8 }}>
+              {editing!=null ? `✏ ${editing}회 수정 중` : "✍ 새 회차 직접 입력"} <span style={{ fontSize:9, color:"#6B7280", fontWeight:500 }}>· 서버 공유 저장</span>
+            </div>
+            <input value={adminToken} onChange={e=>saveToken(e.target.value)} type="password" placeholder="관리자 토큰"
+              style={{ width:"100%", padding:"5px 6px", borderRadius:6, border:`1px solid ${adminToken?"#10B981":"#7F1D1D"}`, background:"#111827", color:"#E5E7EB", fontSize:11, fontFamily:"inherit", marginBottom:6 }}/>
             <div style={{ display:"flex", gap:5, marginBottom:6 }}>
-              <input value={mForm.r} onChange={e=>setMForm(p=>({...p, r:e.target.value.replace(/\D/g,"")}))} placeholder="회차" inputMode="numeric"
-                style={{ width:60, padding:"5px 6px", borderRadius:6, border:"1px solid #374151", background:"#111827", color:"#E5E7EB", fontSize:11, fontFamily:"inherit" }}/>
+              <input value={mForm.r} onChange={e=>setMForm(p=>({...p, r:e.target.value.replace(/\D/g,"")}))} placeholder="회차" inputMode="numeric" disabled={editing!=null}
+                style={{ width:60, padding:"5px 6px", borderRadius:6, border:"1px solid #374151", background:editing!=null?"#1F2937":"#111827", color:"#E5E7EB", fontSize:11, fontFamily:"inherit" }}/>
               <input value={mForm.date} onChange={e=>setMForm(p=>({...p, date:e.target.value}))} placeholder="2026-04-23"
                 style={{ flex:1, padding:"5px 6px", borderRadius:6, border:"1px solid #374151", background:"#111827", color:"#E5E7EB", fontSize:11, fontFamily:"inherit" }}/>
             </div>
@@ -543,21 +606,37 @@ export default function App() {
                 style={{ width:48, padding:"5px 4px", borderRadius:6, border:"1px solid #10B981", background:"#111827", color:"#10B981", fontSize:11, textAlign:"center", fontFamily:"inherit" }}/>
             </div>
             {mErr && <div style={{ fontSize:10, color:"#F87171", marginBottom:5 }}>⚠ {mErr}</div>}
-            <button onClick={addManualRound}
-              style={{ width:"100%", padding:"6px", borderRadius:6, border:"none", background:"rgba(129,140,248,0.15)", color:"#818CF8", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
-              ➕ 추가하고 통계 갱신
-            </button>
+            <div style={{ display:"flex", gap:5 }}>
+              <button onClick={addOrUpdateManualRound} disabled={mBusy}
+                style={{ flex:1, padding:"6px", borderRadius:6, border:"none", background:"rgba(129,140,248,0.15)", color:"#818CF8", fontSize:11, fontWeight:700, cursor:mBusy?"wait":"pointer", fontFamily:"inherit", opacity:mBusy?0.6:1 }}>
+                {mBusy ? "⟳ 저장 중..." : editing!=null ? "💾 수정 저장" : "➕ 추가하고 통계 갱신"}
+              </button>
+              {editing!=null && <button onClick={cancelEdit} disabled={mBusy}
+                style={{ padding:"6px 10px", borderRadius:6, border:"1px solid #374151", background:"transparent", color:"#9CA3AF", fontSize:11, cursor:"pointer", fontFamily:"inherit" }}>
+                취소
+              </button>}
+            </div>
           </div>
           {DATA.recentRounds.map(r=>{
             const mc = r.n.filter(n=>sel.includes(n)).length;
-            return <div key={r.r} style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 8px", background:"#0F172A", borderRadius:8, marginBottom:5, border:mc>=3?"1px solid rgba(245,158,11,0.3)":"1px solid transparent" }}>
-              <div style={{ width:42, flexShrink:0, fontSize:12, fontWeight:800, color:"#F59E0B" }}>{r.r}회</div>
+            const isManual = manualRounds.some(x => x.r === r.r);
+            const manualRd = isManual ? manualRounds.find(x => x.r === r.r) : null;
+            return <div key={r.r} style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 8px", background:"#0F172A", borderRadius:8, marginBottom:5, border:mc>=3?"1px solid rgba(245,158,11,0.3)":isManual?"1px solid rgba(129,140,248,0.25)":"1px solid transparent" }}>
+              <div style={{ width:42, flexShrink:0, fontSize:12, fontWeight:800, color:"#F59E0B" }}>
+                {r.r}회{isManual && <span style={{ fontSize:8, color:"#818CF8", display:"block", lineHeight:1 }}>✍ 수동</span>}
+              </div>
               <div style={{ display:"flex", gap:2, flexWrap:"wrap", flex:1, alignItems:"center" }}>
                 {r.n.map(n=><Ball key={n} num={n} mini sel={sel.includes(n)}/>)}
                 <span style={{ color:"#374151", fontSize:12, margin:"0 1px" }}>+</span>
                 <Ball num={r.b} mini bonus/>
               </div>
               {mc>0&&sel.length>0&&<span style={{ fontSize:9, fontWeight:700, padding:"2px 5px", borderRadius:6, flexShrink:0, background:mc>=3?"rgba(245,158,11,0.15)":"rgba(107,114,128,0.15)", color:mc>=3?"#F59E0B":"#6B7280" }}>{mc}개</span>}
+              {isManual && <div style={{ display:"flex", gap:2, flexShrink:0 }}>
+                <button onClick={()=>startEdit(manualRd)} disabled={mBusy} title="수정"
+                  style={{ padding:"3px 6px", borderRadius:5, border:"1px solid #374151", background:"transparent", color:"#818CF8", fontSize:10, cursor:"pointer", fontFamily:"inherit" }}>✏</button>
+                <button onClick={()=>deleteManualRound(r.r)} disabled={mBusy} title="삭제"
+                  style={{ padding:"3px 6px", borderRadius:5, border:"1px solid #374151", background:"transparent", color:"#F87171", fontSize:10, cursor:"pointer", fontFamily:"inherit" }}>🗑</button>
+              </div>}
             </div>;
           })}
         </div>}
