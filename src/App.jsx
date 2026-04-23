@@ -4,6 +4,7 @@ import { useState, useMemo, useCallback, useEffect, useRef } from "react";
 const BASE_STATS = {
   totalRounds: 1218, latestRound: 1218,
   allFreq: {1:167,2:152,3:171,4:159,5:153,6:163,7:168,8:156,9:133,10:161,11:164,12:177,13:175,14:170,15:166,16:166,17:169,18:172,19:167,20:168,21:165,22:141,23:147,24:164,25:150,26:164,27:180,28:152,29:153,30:156,31:166,32:142,33:173,34:181,35:161,36:162,37:171,38:169,39:165,40:172,41:147,42:154,43:162,44:161,45:173},
+  twFreq: {1:167,2:152,3:171,4:159,5:153,6:163,7:168,8:156,9:133,10:161,11:164,12:177,13:175,14:170,15:166,16:166,17:169,18:172,19:167,20:168,21:165,22:141,23:147,24:164,25:150,26:164,27:180,28:152,29:153,30:156,31:166,32:142,33:173,34:181,35:161,36:162,37:171,38:169,39:165,40:172,41:147,42:154,43:162,44:161,45:173},
   r50Freq: {1:8,2:3,3:12,4:6,5:8,6:8,7:8,8:8,9:7,10:6,11:6,12:7,13:6,14:4,15:9,16:10,17:7,18:4,19:7,20:6,21:4,22:3,23:8,24:9,25:5,26:7,27:12,28:8,29:6,30:7,31:8,32:5,33:6,34:2,35:7,36:7,37:7,38:8,39:6,40:8,41:6,42:7,43:3,44:6,45:5},
   r20Freq: {1:4,2:2,3:4,4:2,5:3,6:2,7:2,8:3,9:2,10:4,11:1,12:1,13:1,14:1,15:4,16:4,17:3,18:1,19:2,20:3,21:2,22:1,23:3,24:4,25:3,26:2,27:8,28:2,29:2,30:4,31:6,32:3,33:2,34:0,35:4,36:3,37:2,38:5,39:2,40:2,41:2,42:3,43:0,44:3,45:3},
   cold: {1:8,2:9,3:0,4:13,5:5,6:10,7:8,8:1,9:8,10:1,11:5,12:16,13:3,14:2,15:1,16:13,17:8,18:15,19:3,20:1,21:3,22:11,23:2,24:2,25:5,26:7,27:4,28:0,29:1,30:4,31:0,32:0,33:4,34:23,35:7,36:5,37:9,38:5,39:9,40:7,41:6,42:0,43:21,44:3,45:0},
@@ -21,27 +22,27 @@ const BASE_STATS = {
   stats: { sumMean: 138.2, sumStd: 30.8 },
 };
 
-// ── API 호출 (자체 Vercel proxy → 외부 proxy 순서) ──
+// ── API 호출 (3개 proxy 동시 시도, 첫 성공값 반환) ──
 async function fetchRound(round) {
   const dhUrl = `https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo=${round}`;
-  const targets = [
-    () => fetch(`/api/lotto?round=${round}`, { signal: AbortSignal.timeout(4000) }),
-    () => fetch(`https://corsproxy.io/?${encodeURIComponent(dhUrl)}`, { signal: AbortSignal.timeout(4000) }),
-    () => fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(dhUrl)}`, { signal: AbortSignal.timeout(4000) }),
-  ];
-  for (const t of targets) {
-    try {
-      const res = await t();
-      if (!res.ok) continue;
-      const d = await res.json();
-      if (d.returnValue === "success") return {
-        r: d.drwNo,
-        n: [d.drwtNo1,d.drwtNo2,d.drwtNo3,d.drwtNo4,d.drwtNo5,d.drwtNo6].sort((a,b)=>a-b),
-        b: d.bnusNo, date: d.drwNoDate,
-      };
-    } catch { continue; }
-  }
-  return null;
+  const parse = async (p) => {
+    const res = await p;
+    if (!res.ok) throw new Error('bad');
+    const d = await res.json();
+    if (d.returnValue !== 'success') throw new Error('fail');
+    return {
+      r: d.drwNo,
+      n: [d.drwtNo1,d.drwtNo2,d.drwtNo3,d.drwtNo4,d.drwtNo5,d.drwtNo6].sort((a,b)=>a-b),
+      b: d.bnusNo, date: d.drwNoDate,
+    };
+  };
+  try {
+    return await Promise.any([
+      parse(fetch(`/api/lotto?round=${round}`, { signal: AbortSignal.timeout(8000) })),
+      parse(fetch(`https://corsproxy.io/?${encodeURIComponent(dhUrl)}`, { signal: AbortSignal.timeout(8000) })),
+      parse(fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(dhUrl)}`, { signal: AbortSignal.timeout(8000) })),
+    ]);
+  } catch { return null; }
 }
 
 function estimateLatest() {
@@ -53,6 +54,39 @@ async function fetchBatch(startRound, count) {
   const rounds = Array.from({length: count}, (_, i) => startRound - i).filter(r => r >= 1);
   const results = await Promise.all(rounds.map(r => fetchRound(r)));
   return results.filter(Boolean).sort((a,b) => b.r - a.r);
+}
+
+// ── 지수 감쇠 시간 가중 빈도 계산 (반감기 52회 ≈ 1년) ──
+function calcTWFreq(freshRounds, base) {
+  const lambda = Math.LN2 / 52;
+  if (!freshRounds?.length) {
+    const tot = Object.values(base.allFreq).reduce((s,v)=>s+v,0);
+    const tw = {};
+    for (let i=1;i<=45;i++) tw[i] = tot>0 ? (base.allFreq[i]||0)/tot : 1/45;
+    return tw;
+  }
+  const latest = freshRounds[0].r;
+  const oldest = freshRounds[freshRounds.length-1].r;
+  const tw = {};
+  for (let i=1;i<=45;i++) tw[i] = 0;
+
+  for (const rd of freshRounds) {
+    const w = Math.exp(-lambda * (latest - rd.r));
+    for (const n of rd.n) tw[n] += w;
+  }
+
+  if (oldest > 1) {
+    const fetchedFreq = {};
+    for (let i=1;i<=45;i++) fetchedFreq[i] = 0;
+    for (const rd of freshRounds) for (const n of rd.n) fetchedFreq[n]++;
+    const avgHistAge = latest - (oldest - 1) / 2;
+    const histW = Math.exp(-lambda * avgHistAge);
+    for (let i=1;i<=45;i++) {
+      const histCount = Math.max(0, (base.allFreq[i]||0) - fetchedFreq[i]);
+      tw[i] += histCount * histW;
+    }
+  }
+  return tw;
 }
 
 // 새로 가져온 회차로 recentRounds + cold + r20Freq 만 업데이트
@@ -86,12 +120,14 @@ function mergeRecent(base, freshRounds) {
   const topPairs = Object.entries(pairCount).sort((a,b)=>b[1]-a[1]).slice(0,13)
     .map(([k,c]) => { const [a,b]=k.split("-").map(Number); return {a,b,c}; });
 
+  const twFreq = calcTWFreq(freshRounds, base);
+
   return {
     ...base,
     latestRound: latest,
     totalRounds: Math.max(base.totalRounds, freshRounds.length),
     recentRounds: freshRounds.slice(0, 15),
-    r20Freq, r50Freq, cold, topPairs,
+    r20Freq, r50Freq, cold, topPairs, twFreq,
   };
 }
 
@@ -173,9 +209,15 @@ function analyze(sel, stats) {
 
 function smartPick(DATA) {
   if (!DATA) return [];
+  const twFreq = DATA.twFreq || DATA.allFreq;
+  const cold = DATA.cold;
+  const twTotal = Object.values(twFreq).reduce((s,v)=>s+v,0);
   const w = {};
-  for (let i=1;i<=45;i++)
-    w[i] = (DATA.allFreq[i]||0)/DATA.totalRounds*0.2 + (DATA.r50Freq[i]||0)/50*0.3 + (DATA.r20Freq[i]||0)/20*0.35 + Math.min((DATA.cold[i]||0)/20,1)*0.15;
+  for (let i=1;i<=45;i++) {
+    const tw = twTotal > 0 ? (twFreq[i]||0)/twTotal : 1/45;
+    const coldBonus = Math.min((cold[i]||0)/20, 1);
+    w[i] = tw * 0.85 + coldBonus * 0.15;
+  }
   const e = Object.entries(w).map(([k,v])=>[+k,v]);
   const tot = e.reduce((s,[,v])=>s+v,0);
   let ps = new Set(), att = 0;
@@ -227,7 +269,7 @@ export default function App() {
     // ── 1단계: 최신 회차 탐색 후 20회차 즉시 로드 (~2-3초) ──
     let latest = estimateLatest();
     let first = null;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 6; i++) {
       first = await fetchRound(latest - i);
       if (first) { latest = latest - i; break; }
     }
@@ -255,6 +297,11 @@ export default function App() {
 
   const an  = useMemo(() => analyze(sel, DATA?.stats), [sel, DATA]);
   const fd  = useMemo(() => {
+    if (fMode === "tw") {
+      const vals = Object.entries(DATA.twFreq||{}).map(([k,v])=>({num:+k,raw:v}));
+      const maxVal = Math.max(...vals.map(v=>v.raw), 1);
+      return vals.map(({num,raw})=>({num, value: Math.round((raw/maxVal)*999)+1}));
+    }
     const d = fMode==="all" ? DATA.allFreq : fMode==="r50" ? DATA.r50Freq : DATA.r20Freq;
     return Object.entries(d).map(([k,v]) => ({num:+k, value:v}));
   }, [fMode, DATA]);
@@ -368,7 +415,7 @@ export default function App() {
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10, flexWrap:"wrap", gap:6 }}>
             <span style={{ fontSize:13, fontWeight:700 }}>📊 출현 빈도</span>
             <div style={{ display:"flex", gap:3 }}>
-              {[{id:"all",l:"전체"},{id:"r50",l:"50회"},{id:"r20",l:"20회"}].map(m=><button key={m.id} onClick={()=>setFMode(m.id)} style={{ padding:"4px 8px", borderRadius:10, border:"none", background:fMode===m.id?"#F59E0B":"#1F2937", color:fMode===m.id?"#000":"#9CA3AF", fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{m.l}</button>)}
+              {[{id:"all",l:"전체"},{id:"r50",l:"50회"},{id:"r20",l:"20회"},{id:"tw",l:"가중"}].map(m=><button key={m.id} onClick={()=>setFMode(m.id)} style={{ padding:"4px 8px", borderRadius:10, border:"none", background:fMode===m.id?(m.id==="tw"?"#818CF8":"#F59E0B"):"#1F2937", color:fMode===m.id?"#000":"#9CA3AF", fontSize:10, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>{m.l}</button>)}
             </div>
           </div>
           <div style={{ display:"flex", flexDirection:"column", gap:1 }}>
