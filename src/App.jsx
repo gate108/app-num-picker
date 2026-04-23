@@ -22,31 +22,42 @@ const BASE_STATS = {
   stats: { sumMean: 138.2, sumStd: 30.8 },
 };
 
-// ── API 호출 (3개 proxy 동시 시도, 첫 성공값 반환) ──
+// ── API 호출 (Vercel 서버사이드 프록시 → 로컬 Vite 프록시 동일 경로) ──
 async function fetchRound(round) {
-  const dhUrl = `https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo=${round}`;
-  const parse = async (p) => {
-    const res = await p;
-    if (!res.ok) throw new Error('bad');
+  try {
+    const res = await fetch(`/api/lotto?round=${round}`, { signal: AbortSignal.timeout(10000) });
+    if (!res.ok) return null;
     const d = await res.json();
-    if (d.returnValue !== 'success') throw new Error('fail');
+    if (d.returnValue !== 'success') return null;
     return {
       r: d.drwNo,
       n: [d.drwtNo1,d.drwtNo2,d.drwtNo3,d.drwtNo4,d.drwtNo5,d.drwtNo6].sort((a,b)=>a-b),
       b: d.bnusNo, date: d.drwNoDate,
     };
-  };
-  try {
-    return await Promise.any([
-      parse(fetch(`/api/lotto?round=${round}`, { signal: AbortSignal.timeout(8000) })),
-      parse(fetch(`https://corsproxy.io/?${encodeURIComponent(dhUrl)}`, { signal: AbortSignal.timeout(8000) })),
-      parse(fetch(`https://api.allorigins.win/raw?url=${encodeURIComponent(dhUrl)}`, { signal: AbortSignal.timeout(8000) })),
-    ]);
   } catch { return null; }
 }
 
 function estimateLatest() {
   return Math.floor((Date.now() - new Date(2002,11,7)) / (7*24*60*60*1000)) + 1;
+}
+
+// ── localStorage 캐시 (주 1회 추첨이므로 새 회차 나올 때만 갱신) ──
+const CACHE_KEY = 'lotto_cache_v2';
+
+function loadCache() {
+  try {
+    const raw = localStorage.getItem(CACHE_KEY);
+    if (!raw) return null;
+    const { data } = JSON.parse(raw);
+    if (!data?.latestRound) return null;
+    return data;
+  } catch { return null; }
+}
+
+function saveCache(data) {
+  try {
+    localStorage.setItem(CACHE_KEY, JSON.stringify({ data, savedAt: Date.now() }));
+  } catch {}
 }
 
 // 병렬 배치로 N회차 가져오기
@@ -240,6 +251,8 @@ function StatusBadge({ status, round }) {
     loading:  { bg:"rgba(99,102,241,0.15)",  color:"#818CF8", text:"⟳ 최신화 중..." },
     bg:       { bg:"rgba(99,102,241,0.08)",  color:"#6366F1", text:"⟳ 통계 보강 중..." },
     done:     { bg:"rgba(16,185,129,0.12)",  color:"#10B981", text:`✓ ${round}회차 최신화 완료` },
+    cached:   { bg:"rgba(16,185,129,0.08)",  color:"#6EE7B7", text:`✓ ${round}회차 저장 데이터 사용 중` },
+    base:     { bg:"rgba(107,114,128,0.1)",  color:"#9CA3AF", text:"ℹ 내장 기본 데이터 사용 중 · 연결 시 자동 갱신" },
     error:    { bg:"rgba(239,68,68,0.1)",    color:"#F87171", text:"⚠ 네트워크 오류 · 내장 데이터 사용 중" },
   }[status] || {};
   return (
@@ -256,28 +269,47 @@ export default function App() {
   const [guide, setGuide]   = useState(false);
   const [anim, setAnim]     = useState(false);
   const [saved, setSaved]   = useState([]);
-  const [DATA, setDATA]     = useState(BASE_STATS);
-  const [status, setStatus] = useState("idle"); // idle | loading | bg | done | error
+  const [DATA, setDATA]     = useState(() => loadCache() || BASE_STATS);
+  const [status, setStatus] = useState("idle"); // idle | loading | bg | done | cached | error
   const abortRef            = useRef(null);
 
   useEffect(() => { doUpdate(); return () => abortRef.current?.abort(); }, []);
 
-  async function doUpdate() {
+  async function doUpdate(force = false) {
     if (abortRef.current) abortRef.current.abort();
+
+    // ── 캐시 확인: 저장된 회차가 현재 추정 최신 회차와 같으면 네트워크 불필요 ──
+    const cached = loadCache();
+    const estimated = estimateLatest();
+    if (!force && cached && cached.latestRound >= estimated - 1) {
+      setDATA(cached);
+      setStatus("cached");
+      return;
+    }
+
     setStatus("loading");
 
-    // ── 1단계: 최신 회차 탐색 후 20회차 즉시 로드 (~2-3초) ──
-    let latest = estimateLatest();
+    // ── 1단계: 최신 회차 탐색 후 20회차 즉시 로드 ──
+    let latest = estimated;
     let first = null;
     for (let i = 0; i < 6; i++) {
       first = await fetchRound(latest - i);
       if (first) { latest = latest - i; break; }
     }
-    if (!first) { setStatus("error"); return; }
+    if (!first) {
+      // 네트워크 실패 시 캐시 또는 내장 데이터로 소프트 폴백
+      if (cached) { setDATA(cached); setStatus("cached"); }
+      else { setStatus("base"); }
+      return;
+    }
 
     const fast = await fetchBatch(latest, 20);
     if (fast.length > 0) {
-      setDATA(prev => mergeRecent(prev, fast));
+      setDATA(prev => {
+        const merged = mergeRecent(prev, fast);
+        saveCache(merged);
+        return merged;
+      });
       setStatus("done");
     }
 
@@ -286,7 +318,11 @@ export default function App() {
     const extra = await fetchBatch(latest - 20, 80);
     const all = [...fast, ...extra].sort((a,b)=>b.r-a.r);
     if (all.length > 20) {
-      setDATA(prev => mergeRecent(prev, all));
+      setDATA(prev => {
+        const merged = mergeRecent(prev, all);
+        saveCache(merged);
+        return merged;
+      });
     }
     setStatus("done");
   }
@@ -326,9 +362,9 @@ export default function App() {
                 1~{DATA.latestRound}회 · {DATA.totalRounds}회차 통계 기반
               </p>
             </div>
-            <button onClick={doUpdate} disabled={status==="loading"||status==="bg"} style={{ padding:"5px 10px", borderRadius:14, border:"1px solid rgba(99,102,241,0.3)", background:"rgba(99,102,241,0.15)", color:"#818CF8", fontSize:10, fontWeight:700, cursor:(status==="loading"||status==="bg")?"wait":"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:3 }}>
+            <button onClick={() => doUpdate(status==="cached")} disabled={status==="loading"||status==="bg"} style={{ padding:"5px 10px", borderRadius:14, border:"1px solid rgba(99,102,241,0.3)", background:"rgba(99,102,241,0.15)", color:"#818CF8", fontSize:10, fontWeight:700, cursor:(status==="loading"||status==="bg")?"wait":"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:3 }}>
               <span style={{ display:"inline-block", animation:(status==="loading"||status==="bg")?"spin 1s linear infinite":"none", fontSize:12 }}>🔄</span>
-              {status==="loading"||status==="bg" ? "갱신중" : "최신화"}
+              {status==="loading"||status==="bg" ? "갱신중" : status==="cached" ? "강제갱신" : "최신화"}
             </button>
           </div>
 
