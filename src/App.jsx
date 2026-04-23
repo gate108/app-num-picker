@@ -272,6 +272,39 @@ export default function App() {
   const [DATA, setDATA]     = useState(() => loadCache() || BASE_STATS);
   const [status, setStatus] = useState("idle"); // idle | loading | bg | done | cached | error
   const abortRef            = useRef(null);
+  const [mForm, setMForm]   = useState(() => ({ r:"", n:["","","","","",""], b:"", date:"" }));
+  const [mErr, setMErr]     = useState("");
+
+  function addManualRound() {
+    setMErr("");
+    const r = parseInt(mForm.r, 10);
+    const nums = mForm.n.map(x => parseInt(x, 10));
+    const b = parseInt(mForm.b, 10);
+    const date = mForm.date.trim();
+    if (!r || r < 1) return setMErr("회차를 입력하세요");
+    if (nums.some(x => !x || x < 1 || x > 45)) return setMErr("당첨번호는 1~45 정수 6개");
+    if (new Set(nums).size !== 6) return setMErr("당첨번호 6개가 중복되었습니다");
+    if (!b || b < 1 || b > 45 || nums.includes(b)) return setMErr("보너스 번호 확인");
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return setMErr("날짜 YYYY-MM-DD 형식");
+
+    setDATA(prev => {
+      const sorted = [...nums].sort((a,b)=>a-b);
+      const newRd = { r, n: sorted, b, date };
+      const exists = prev.recentRounds.some(x => x.r === r);
+      if (exists) { setMErr(`${r}회는 이미 입력됨`); return prev; }
+
+      const allFreq = { ...prev.allFreq };
+      for (const x of sorted) allFreq[x] = (allFreq[x]||0) + 1;
+
+      const merged = mergeRecent(
+        { ...prev, allFreq, totalRounds: (prev.totalRounds||0) + 1 },
+        [newRd, ...prev.recentRounds].sort((a,b)=>b.r-a.r),
+      );
+      saveCache(merged);
+      return merged;
+    });
+    setMForm({ r:"", n:["","","","","",""], b:"", date:"" });
+  }
 
   useEffect(() => { doUpdate(); return () => abortRef.current?.abort(); }, []);
 
@@ -487,6 +520,33 @@ export default function App() {
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
             <span style={{ fontSize:13, fontWeight:700 }}>📋 최근 당첨 번호</span>
             {DATA.recentRounds[0]?.date && <span style={{ fontSize:10, color:"#6B7280" }}>{DATA.recentRounds[0].date} 기준</span>}
+          </div>
+
+          {/* 수동 입력 폼 */}
+          <div style={{ padding:10, background:"#0F172A", borderRadius:8, marginBottom:10, border:"1px solid rgba(99,102,241,0.2)" }}>
+            <div style={{ fontSize:11, fontWeight:700, color:"#818CF8", marginBottom:8 }}>✍ 새 회차 직접 입력</div>
+            <div style={{ display:"flex", gap:5, marginBottom:6 }}>
+              <input value={mForm.r} onChange={e=>setMForm(p=>({...p, r:e.target.value.replace(/\D/g,"")}))} placeholder="회차" inputMode="numeric"
+                style={{ width:60, padding:"5px 6px", borderRadius:6, border:"1px solid #374151", background:"#111827", color:"#E5E7EB", fontSize:11, fontFamily:"inherit" }}/>
+              <input value={mForm.date} onChange={e=>setMForm(p=>({...p, date:e.target.value}))} placeholder="2026-04-23"
+                style={{ flex:1, padding:"5px 6px", borderRadius:6, border:"1px solid #374151", background:"#111827", color:"#E5E7EB", fontSize:11, fontFamily:"inherit" }}/>
+            </div>
+            <div style={{ display:"flex", gap:3, marginBottom:6, alignItems:"center", flexWrap:"wrap" }}>
+              {mForm.n.map((v,i)=><input key={i} value={v} inputMode="numeric"
+                onChange={e=>{ const nv=e.target.value.replace(/\D/g,"").slice(0,2); setMForm(p=>({...p, n:p.n.map((x,j)=>j===i?nv:x)})); }}
+                placeholder={`#${i+1}`}
+                style={{ width:36, padding:"5px 4px", borderRadius:6, border:"1px solid #374151", background:"#111827", color:"#E5E7EB", fontSize:11, textAlign:"center", fontFamily:"inherit" }}/>)}
+              <span style={{ color:"#374151", fontSize:13, margin:"0 1px" }}>+</span>
+              <input value={mForm.b} inputMode="numeric"
+                onChange={e=>setMForm(p=>({...p, b:e.target.value.replace(/\D/g,"").slice(0,2)}))}
+                placeholder="보너스"
+                style={{ width:48, padding:"5px 4px", borderRadius:6, border:"1px solid #10B981", background:"#111827", color:"#10B981", fontSize:11, textAlign:"center", fontFamily:"inherit" }}/>
+            </div>
+            {mErr && <div style={{ fontSize:10, color:"#F87171", marginBottom:5 }}>⚠ {mErr}</div>}
+            <button onClick={addManualRound}
+              style={{ width:"100%", padding:"6px", borderRadius:6, border:"none", background:"rgba(129,140,248,0.15)", color:"#818CF8", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit" }}>
+              ➕ 추가하고 통계 갱신
+            </button>
           </div>
           {DATA.recentRounds.map(r=>{
             const mc = r.n.filter(n=>sel.includes(n)).length;
