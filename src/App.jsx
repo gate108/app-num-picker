@@ -1,15 +1,119 @@
-import { useState, useMemo, useCallback } from "react";
+import { useState, useMemo, useCallback, useEffect } from "react";
 
-const DATA = {
-  totalRounds: 1218, latestRound: 1218,
-  allFreq: {1:167,2:152,3:171,4:159,5:153,6:163,7:168,8:156,9:133,10:161,11:164,12:177,13:175,14:170,15:166,16:166,17:169,18:172,19:167,20:168,21:165,22:141,23:147,24:164,25:150,26:164,27:180,28:152,29:153,30:156,31:166,32:142,33:173,34:181,35:161,36:162,37:171,38:169,39:165,40:172,41:147,42:154,43:162,44:161,45:173},
-  r50Freq: {1:8,2:3,3:12,4:6,5:8,6:8,7:8,8:8,9:7,10:6,11:6,12:7,13:6,14:4,15:9,16:10,17:7,18:4,19:7,20:6,21:4,22:3,23:8,24:9,25:5,26:7,27:12,28:8,29:6,30:7,31:8,32:5,33:6,34:2,35:7,36:7,37:7,38:8,39:6,40:8,41:6,42:7,43:3,44:6,45:5},
-  r20Freq: {1:4,2:2,3:4,4:2,5:3,6:2,7:2,8:3,9:2,10:4,11:1,12:1,13:1,14:1,15:4,16:4,17:3,18:1,19:2,20:3,21:2,22:1,23:3,24:4,25:3,26:2,27:8,28:2,29:2,30:4,31:6,32:3,33:2,34:0,35:4,36:3,37:2,38:5,39:2,40:2,41:2,42:3,43:0,44:3,45:3},
-  cold: {1:8,2:9,3:0,4:13,5:5,6:10,7:8,8:1,9:8,10:1,11:5,12:16,13:3,14:2,15:1,16:13,17:8,18:15,19:3,20:1,21:3,22:11,23:2,24:2,25:5,26:7,27:4,28:0,29:1,30:4,31:0,32:0,33:4,34:23,35:7,36:5,37:9,38:5,39:9,40:7,41:6,42:0,43:21,44:3,45:0},
-  topPairs: [{a:27,b:38,c:10},{a:3,b:15,c:7},{a:27,b:36,c:6},{a:7,b:9,c:6},{a:15,b:19,c:5},{a:19,b:21,c:5},{a:15,b:27,c:5},{a:15,b:33,c:5},{a:3,b:27,c:5},{a:16,b:28,c:5},{a:30,b:31,c:5},{a:3,b:6,c:5},{a:37,b:40,c:5}],
-  recentRounds: [{r:1218,n:[3,28,31,32,42,45],b:25},{r:1217,n:[8,10,15,20,29,31],b:41},{r:1216,n:[3,10,14,15,23,24],b:25},{r:1215,n:[13,15,19,21,44,45],b:39},{r:1214,n:[10,15,19,27,30,33],b:14},{r:1213,n:[5,11,25,27,36,38],b:2},{r:1212,n:[5,8,25,31,41,44],b:45},{r:1211,n:[23,26,27,35,38,40],b:10},{r:1210,n:[1,7,9,17,27,38],b:31},{r:1209,n:[2,17,20,35,37,39],b:24},{r:1208,n:[6,27,30,36,38,42],b:25},{r:1207,n:[10,22,24,27,38,45],b:11},{r:1206,n:[1,3,17,26,27,42],b:23},{r:1205,n:[1,4,16,23,31,41],b:2},{r:1204,n:[8,16,28,30,31,44],b:27}],
-  stats: { sumMean:138.2, sumStd:30.8, acMean:8.0, rangeMean:32.7, consecutiveRate:51.7 }
-};
+// 기존 내장 데이터 (오프라인 폴백)
+const EMBEDDED_DATA = [
+  {r:1218,n:[3,28,31,32,42,45],b:25},{r:1217,n:[8,10,15,20,29,31],b:41},{r:1216,n:[3,10,14,15,23,24],b:25},{r:1215,n:[13,15,19,21,44,45],b:39},{r:1214,n:[10,15,19,27,30,33],b:14},{r:1213,n:[5,11,25,27,36,38],b:2},{r:1212,n:[5,8,25,31,41,44],b:45},{r:1211,n:[23,26,27,35,38,40],b:10},{r:1210,n:[1,7,9,17,27,38],b:31},{r:1209,n:[2,17,20,35,37,39],b:24},{r:1208,n:[6,27,30,36,38,42],b:25},{r:1207,n:[10,22,24,27,38,45],b:11},{r:1206,n:[1,3,17,26,27,42],b:23},{r:1205,n:[1,4,16,23,31,41],b:2},{r:1204,n:[8,16,28,30,31,44],b:27},{r:1203,n:[3,6,18,29,35,39],b:24},{r:1202,n:[5,12,21,33,37,40],b:7},{r:1201,n:[7,9,24,27,35,36],b:37},{r:1200,n:[1,2,4,16,20,32],b:45},{r:1199,n:[16,24,25,30,31,32],b:7}
+];
+
+// 동행복권 API에서 회차별 당첨번호 조회
+async function fetchRound(round) {
+  const url = `https://www.dhlottery.co.kr/common.do?method=getLottoNumber&drwNo=${round}`;
+  // CORS 프록시 목록 (순서대로 시도)
+  const proxies = [
+    (u) => `https://corsproxy.io/?${encodeURIComponent(u)}`,
+    (u) => `https://api.allorigins.win/raw?url=${encodeURIComponent(u)}`,
+    (u) => u, // 직접 시도 (same-origin 또는 CORS 허용 시)
+  ];
+  for (const proxy of proxies) {
+    try {
+      const res = await fetch(proxy(url), { signal: AbortSignal.timeout(5000) });
+      if (!res.ok) continue;
+      const data = await res.json();
+      if (data.returnValue === "success") {
+        return {
+          r: data.drwNo,
+          n: [data.drwtNo1, data.drwtNo2, data.drwtNo3, data.drwtNo4, data.drwtNo5, data.drwtNo6].sort((a,b) => a-b),
+          b: data.bnusNo,
+          date: data.drwNoDate,
+        };
+      }
+    } catch (e) { continue; }
+  }
+  return null;
+}
+
+// 최신 회차부터 역순으로 N회차 가져오기
+async function fetchLatestRounds(count = 100, onProgress) {
+  // 최신 회차 추정: 1회차 = 2002-12-07, 매주 토요일 추첨
+  const firstDraw = new Date(2002, 11, 7);
+  const now = new Date();
+  const weeks = Math.floor((now - firstDraw) / (7 * 24 * 60 * 60 * 1000));
+  let latestRound = weeks + 1;
+
+  // 최신 회차 확인 (존재하지 않으면 한 칸 뒤로)
+  let check = await fetchRound(latestRound);
+  if (!check) {
+    latestRound--;
+    check = await fetchRound(latestRound);
+  }
+  if (!check) return null;
+
+  const results = [check];
+  if (onProgress) onProgress(1, count);
+
+  // 나머지 회차 병렬로 가져오기 (10개씩 배치)
+  const batchSize = 10;
+  for (let i = 1; i < count; i += batchSize) {
+    const batch = [];
+    for (let j = i; j < Math.min(i + batchSize, count); j++) {
+      const rd = latestRound - j;
+      if (rd < 1) break;
+      batch.push(fetchRound(rd));
+    }
+    const batchResults = await Promise.all(batch);
+    batchResults.forEach(r => { if (r) results.push(r); });
+    if (onProgress) onProgress(Math.min(results.length, count), count);
+  }
+
+  return results.sort((a, b) => b.r - a.r);
+}
+
+// 통계 계산
+function computeStats(rounds) {
+  const allFreq = {}, r50Freq = {}, r20Freq = {}, cold = {};
+  for (let i = 1; i <= 45; i++) { allFreq[i] = 0; r50Freq[i] = 0; r20Freq[i] = 0; }
+
+  const latest = rounds[0]?.r || 0;
+  const lastSeen = {};
+
+  rounds.forEach((rd, idx) => {
+    rd.n.forEach(n => {
+      allFreq[n]++;
+      if (idx < 50) r50Freq[n]++;
+      if (idx < 20) r20Freq[n]++;
+      if (!(n in lastSeen)) lastSeen[n] = rd.r;
+    });
+  });
+
+  for (let i = 1; i <= 45; i++) cold[i] = latest - (lastSeen[i] || 0);
+
+  // 동반 출현 (최근 100회)
+  const pairCount = {};
+  rounds.slice(0, 100).forEach(rd => {
+    for (let i = 0; i < 6; i++) for (let j = i+1; j < 6; j++) {
+      const key = `${rd.n[i]}-${rd.n[j]}`;
+      pairCount[key] = (pairCount[key] || 0) + 1;
+    }
+  });
+  const topPairs = Object.entries(pairCount)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 13)
+    .map(([k, c]) => { const [a, b] = k.split("-").map(Number); return { a, b, c }; });
+
+  // 합계 통계
+  let sumTotal = 0, sumSq = 0;
+  rounds.forEach(rd => { const s = rd.n.reduce((a, b) => a + b, 0); sumTotal += s; sumSq += s * s; });
+  const sumMean = sumTotal / rounds.length;
+  const sumStd = Math.sqrt(sumSq / rounds.length - sumMean * sumMean);
+
+  return {
+    totalRounds: rounds.length,
+    latestRound: latest,
+    allFreq, r50Freq, r20Freq, cold, topPairs,
+    recentRounds: rounds.slice(0, 15),
+    stats: { sumMean: Math.round(sumMean * 10) / 10, sumStd: Math.round(sumStd * 10) / 10 }
+  };
+}
 
 const BALL_COLORS = n => {
   if (n <= 10) return { bg: "#FCD34D", text: "#92400E", glow: "#FDE68A" };
@@ -24,28 +128,21 @@ function LottoBall({ num, size = 36, selected, onClick, bonus, grayOut, mini }) 
   const s = mini ? 26 : size;
   const isActive = selected || bonus;
   return (
-    <button
-      onClick={onClick}
-      style={{
-        width: s, height: s, borderRadius: "50%",
-        background: grayOut ? "#1F2937" : `radial-gradient(circle at 35% 35%, ${c.glow}, ${c.bg})`,
-        color: grayOut ? "#4B5563" : c.text,
-        border: selected ? "2.5px solid #F59E0B" : bonus ? "2.5px solid #10B981" : "2px solid rgba(255,255,255,0.12)",
-        fontSize: mini ? 10 : s > 38 ? 15 : 13,
-        fontWeight: 800,
-        display: "inline-flex", alignItems: "center", justifyContent: "center",
-        cursor: onClick ? "pointer" : "default",
-        transition: "all 0.15s cubic-bezier(.4,0,.2,1)",
-        transform: isActive ? "scale(1.08)" : "scale(1)",
-        boxShadow: selected ? `0 0 12px ${c.bg}88` : bonus ? `0 0 10px #10B98188` : grayOut ? "none" : `0 1px 4px ${c.bg}44`,
-        flexShrink: 0, padding: 0,
-        fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
-        letterSpacing: -0.5,
-        WebkitTapHighlightColor: "transparent",
-      }}
-    >
-      {num}
-    </button>
+    <button onClick={onClick} style={{
+      width: s, height: s, borderRadius: "50%",
+      background: grayOut ? "#1F2937" : `radial-gradient(circle at 35% 35%, ${c.glow}, ${c.bg})`,
+      color: grayOut ? "#4B5563" : c.text,
+      border: selected ? "2.5px solid #F59E0B" : bonus ? "2.5px solid #10B981" : "2px solid rgba(255,255,255,0.12)",
+      fontSize: mini ? 10 : s > 38 ? 15 : 13, fontWeight: 800,
+      display: "inline-flex", alignItems: "center", justifyContent: "center",
+      cursor: onClick ? "pointer" : "default",
+      transition: "all 0.15s cubic-bezier(.4,0,.2,1)",
+      transform: isActive ? "scale(1.08)" : "scale(1)",
+      boxShadow: selected ? `0 0 12px ${c.bg}88` : bonus ? `0 0 10px #10B98188` : grayOut ? "none" : `0 1px 4px ${c.bg}44`,
+      flexShrink: 0, padding: 0,
+      fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
+      letterSpacing: -0.5, WebkitTapHighlightColor: "transparent",
+    }}>{num}</button>
   );
 }
 
@@ -53,11 +150,7 @@ function FreqBar({ num, value, max, selected, onClick }) {
   const c = BALL_COLORS(num);
   const pct = max > 0 ? (value / max) * 100 : 0;
   return (
-    <div onClick={onClick} style={{
-      display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
-      padding: "1.5px 3px", borderRadius: 5,
-      background: selected ? "rgba(245,158,11,0.1)" : "transparent",
-    }}>
+    <div onClick={onClick} style={{ display: "flex", alignItems: "center", gap: 5, cursor: "pointer", padding: "1.5px 3px", borderRadius: 5, background: selected ? "rgba(245,158,11,0.1)" : "transparent" }}>
       <span style={{ width: 20, textAlign: "right", fontSize: 11, fontWeight: 700, color: selected ? "#F59E0B" : "#9CA3AF", fontFamily: "monospace" }}>{num}</span>
       <div style={{ flex: 1, height: 14, background: "#1F2937", borderRadius: 3, overflow: "hidden" }}>
         <div style={{ height: "100%", width: `${pct}%`, background: `linear-gradient(90deg, ${c.bg}CC, ${c.bg})`, borderRadius: 3, transition: "width 0.4s ease" }} />
@@ -85,8 +178,8 @@ function ScoreGauge({ label, value, max, color }) {
   );
 }
 
-function analyzeSelection(selected) {
-  if (selected.length !== 6) return null;
+function analyzeSelection(selected, stats) {
+  if (selected.length !== 6 || !stats) return null;
   const nums = [...selected].sort((a, b) => a - b);
   const sum = nums.reduce((a, b) => a + b, 0);
   const odd = nums.filter(n => n % 2 === 1).length;
@@ -95,7 +188,7 @@ function analyzeSelection(selected) {
   const diffs = new Set();
   for (let i = 0; i < 6; i++) for (let j = i + 1; j < 6; j++) diffs.add(nums[j] - nums[i]);
   const ac = diffs.size - 5;
-  const sumScore = Math.max(0, 100 - Math.abs(sum - DATA.stats.sumMean) / DATA.stats.sumStd * 25);
+  const sumScore = Math.max(0, 100 - Math.abs(sum - stats.sumMean) / stats.sumStd * 25);
   const oddScore = (odd >= 2 && odd <= 4) ? 100 : (odd === 1 || odd === 5) ? 50 : 10;
   const lowScore = (low >= 2 && low <= 4) ? 100 : (low === 1 || low === 5) ? 50 : 10;
   const acScore = ac >= 7 ? 100 : ac >= 5 ? 70 : 30;
@@ -103,10 +196,11 @@ function analyzeSelection(selected) {
   return { sum, odd, low, range, ac, sumScore, oddScore, lowScore, acScore, rangeScore, total: Math.round((sumScore + oddScore + lowScore + acScore + rangeScore) / 5) };
 }
 
-function smartPick() {
+function smartPick(DATA) {
+  if (!DATA) return [];
   const weights = {};
   for (let i = 1; i <= 45; i++) {
-    weights[i] = DATA.allFreq[i] / DATA.totalRounds * 0.2 + DATA.r50Freq[i] / 50 * 0.3 + DATA.r20Freq[i] / 20 * 0.35 + Math.min(DATA.cold[i] / 20, 1) * 0.15;
+    weights[i] = (DATA.allFreq[i] || 0) / DATA.totalRounds * 0.2 + (DATA.r50Freq[i] || 0) / 50 * 0.3 + (DATA.r20Freq[i] || 0) / 20 * 0.35 + Math.min((DATA.cold[i] || 0) / 20, 1) * 0.15;
   }
   const entries = Object.entries(weights).map(([k, v]) => [parseInt(k), v]);
   const total = entries.reduce((s, [, v]) => s + v, 0);
@@ -133,6 +227,40 @@ export default function LottoPicker() {
   const [animating, setAnimating] = useState(false);
   const [savedSets, setSavedSets] = useState([]);
 
+  // 데이터 상태
+  const [DATA, setDATA] = useState(() => computeStats(EMBEDDED_DATA));
+  const [loading, setLoading] = useState(false);
+  const [loadProgress, setLoadProgress] = useState("");
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [updateError, setUpdateError] = useState(null);
+
+  // 앱 시작 시 자동 업데이트
+  useEffect(() => {
+    handleUpdate();
+  }, []);
+
+  const handleUpdate = async () => {
+    setLoading(true);
+    setUpdateError(null);
+    setLoadProgress("최신 회차 확인중...");
+    try {
+      const rounds = await fetchLatestRounds(200, (done, total) => {
+        setLoadProgress(`${done}/${total}회차 로딩중...`);
+      });
+      if (rounds && rounds.length > 0) {
+        const stats = computeStats(rounds);
+        setDATA(stats);
+        setLastUpdate(new Date().toLocaleString("ko-KR"));
+        setLoadProgress("");
+      } else {
+        setUpdateError("데이터를 가져올 수 없습니다");
+      }
+    } catch (e) {
+      setUpdateError("네트워크 오류 - 내장 데이터 사용중");
+    }
+    setLoading(false);
+  };
+
   const toggleNum = useCallback((n) => {
     setSelected(prev => {
       if (prev.includes(n)) return prev.filter(x => x !== n);
@@ -141,16 +269,17 @@ export default function LottoPicker() {
     });
   }, []);
 
-  const analysis = useMemo(() => analyzeSelection(selected), [selected]);
+  const analysis = useMemo(() => analyzeSelection(selected, DATA?.stats), [selected, DATA]);
   const freqData = useMemo(() => {
+    if (!DATA) return [];
     const d = freqMode === "all" ? DATA.allFreq : freqMode === "r50" ? DATA.r50Freq : DATA.r20Freq;
     return Object.entries(d).map(([k, v]) => ({ num: parseInt(k), value: v }));
-  }, [freqMode]);
-  const maxFreq = useMemo(() => Math.max(...freqData.map(d => d.value)), [freqData]);
+  }, [freqMode, DATA]);
+  const maxFreq = useMemo(() => Math.max(...freqData.map(d => d.value), 1), [freqData]);
 
   const handleSmartPick = () => {
     setAnimating(true); setSelected([]);
-    setTimeout(() => { setSelected(smartPick()); setAnimating(false); }, 600);
+    setTimeout(() => { setSelected(smartPick(DATA)); setAnimating(false); }, 600);
   };
 
   const tabs = [
@@ -163,15 +292,39 @@ export default function LottoPicker() {
 
   return (
     <div style={{ minHeight: "100vh", background: "#0A0E17", fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif", color: "#E5E7EB", overflowX: "hidden", WebkitFontSmoothing: "antialiased" }}>
+      {/* Header */}
       <div style={{ background: "linear-gradient(135deg, #0F172A 0%, #1E1B4B 50%, #0F172A 100%)", borderBottom: "1px solid rgba(245,158,11,0.2)", padding: "14px 12px 10px", position: "sticky", top: 0, zIndex: 100 }}>
         <div style={{ maxWidth: 480, margin: "0 auto" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
             <div style={{ fontSize: 24 }}>🎱</div>
-            <div>
+            <div style={{ flex: 1 }}>
               <h1 style={{ margin: 0, fontSize: 19, fontWeight: 900, background: "linear-gradient(135deg, #F59E0B, #FBBF24, #F59E0B)", WebkitBackgroundClip: "text", WebkitTextFillColor: "transparent", letterSpacing: -0.5 }}>로또 번호 분석기</h1>
-              <p style={{ margin: 0, fontSize: 11, color: "#6B7280", fontWeight: 500 }}>1~{DATA.latestRound}회 데이터 기반 통계 분석</p>
+              <p style={{ margin: 0, fontSize: 11, color: "#6B7280", fontWeight: 500 }}>
+                {DATA ? `1~${DATA.latestRound}회 (${DATA.totalRounds}회차 분석)` : "로딩중..."}
+              </p>
             </div>
+            {/* 업데이트 버튼 */}
+            <button onClick={handleUpdate} disabled={loading} style={{
+              padding: "5px 10px", borderRadius: 14, border: "1px solid rgba(99,102,241,0.3)",
+              background: loading ? "rgba(99,102,241,0.1)" : "rgba(99,102,241,0.15)",
+              color: "#818CF8", fontSize: 10, fontWeight: 700, cursor: loading ? "wait" : "pointer",
+              fontFamily: "inherit", WebkitTapHighlightColor: "transparent",
+              display: "flex", alignItems: "center", gap: 4,
+            }}>
+              <span style={{ display: "inline-block", animation: loading ? "spin 1s linear infinite" : "none" }}>🔄</span>
+              {loading ? "갱신중" : "최신화"}
+            </button>
           </div>
+
+          {/* 업데이트 상태 표시 */}
+          {(loadProgress || updateError || lastUpdate) && (
+            <div style={{ fontSize: 10, marginBottom: 4, padding: "3px 8px", borderRadius: 6, background: updateError ? "rgba(239,68,68,0.1)" : "rgba(99,102,241,0.08)" }}>
+              {loadProgress && <span style={{ color: "#818CF8" }}>{loadProgress}</span>}
+              {updateError && <span style={{ color: "#EF4444" }}>{updateError}</span>}
+              {!loadProgress && !updateError && lastUpdate && <span style={{ color: "#6B7280" }}>최종 업데이트: {lastUpdate}</span>}
+            </div>
+          )}
+
           <div style={{ display: "flex", gap: 2 }}>
             {tabs.map(t => (
               <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -220,7 +373,7 @@ export default function LottoPicker() {
             </div>
             <button onClick={() => setShowGuide(!showGuide)} style={{ marginTop: 8, width: "100%", padding: "5px", borderRadius: 6, border: "none", background: "rgba(129,140,248,0.1)", color: "#818CF8", fontSize: 10, cursor: "pointer", fontFamily: "inherit", fontWeight: 600 }}>{showGuide ? "▲ 접기" : "▼ 지표 설명 보기"}</button>
             {showGuide && <div style={{ marginTop: 8, padding: 10, background: "#0F172A", borderRadius: 8, fontSize: 10, lineHeight: 1.7, color: "#9CA3AF" }}>
-              <p style={{ margin: "0 0 4px" }}><b style={{ color: "#60A5FA" }}>∑ 합계</b>: 6개 번호의 합. 평균 138, 표준편차 31.</p>
+              <p style={{ margin: "0 0 4px" }}><b style={{ color: "#60A5FA" }}>∑ 합계</b>: 6개 번호의 합. 평균 {DATA.stats.sumMean}, 표준편차 {DATA.stats.sumStd}.</p>
               <p style={{ margin: "0 0 4px" }}><b style={{ color: "#A78BFA" }}>⚖ 홀짝</b>: 3:3이 최빈, 2:4도 양호.</p>
               <p style={{ margin: "0 0 4px" }}><b style={{ color: "#F87171" }}>📏 저고</b>: 1~22 vs 23~45. 3:3 최다.</p>
               <p style={{ margin: "0 0 4px" }}><b style={{ color: "#34D399" }}>🧬 AC</b>: 복잡도(0~10). 7+ 가 70%+.</p>
@@ -290,8 +443,11 @@ export default function LottoPicker() {
         </div>}
 
         {tab === "recent" && <div style={card}>
-          <span style={{ fontSize: 13, fontWeight: 700 }}>📋 최근 당첨 번호</span>
-          <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 5 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+            <span style={{ fontSize: 13, fontWeight: 700 }}>📋 최근 당첨 번호</span>
+            {DATA.recentRounds[0]?.date && <span style={{ fontSize: 10, color: "#6B7280" }}>{DATA.recentRounds[0].date}</span>}
+          </div>
+          <div style={{ display: "flex", flexDirection: "column", gap: 5 }}>
             {DATA.recentRounds.map(r => {
               const mc = r.n.filter(n => selected.includes(n)).length;
               return <div key={r.r} style={{ display: "flex", alignItems: "center", gap: 6, padding: "7px 8px", background: "#0F172A", borderRadius: 8, border: mc >= 3 ? "1px solid rgba(245,158,11,0.3)" : "1px solid transparent" }}>
@@ -310,6 +466,7 @@ export default function LottoPicker() {
 
       <style>{`
         @keyframes popIn { 0%{transform:scale(0.3);opacity:0} 70%{transform:scale(1.1)} 100%{transform:scale(1);opacity:1} }
+        @keyframes spin { 0%{transform:rotate(0deg)} 100%{transform:rotate(360deg)} }
         *{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent;}
         button:active{opacity:0.7;}
         ::-webkit-scrollbar{width:3px;}
