@@ -1,6 +1,6 @@
 // api/lotto.js - Vercel Serverless Function
 // 동행복권 API CORS 프록시 (강건성 강화)
-export const config = { runtime: 'nodejs' };
+export const config = { runtime: 'nodejs', regions: ['icn1'] };
 
 export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", "*");
