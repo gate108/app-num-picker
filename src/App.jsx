@@ -358,9 +358,7 @@ export default function App() {
             <div style={{ fontSize:24 }}>🎱</div>
             <div style={{ flex:1 }}>
               <h1 style={{ margin:0, fontSize:19, fontWeight:900, background:"linear-gradient(135deg,#F59E0B,#FBBF24,#F59E0B)", WebkitBackgroundClip:"text", WebkitTextFillColor:"transparent", letterSpacing:-0.5 }}>로또 번호 분석기</h1>
-              <p style={{ margin:0, fontSize:10, color:"#6B7280" }}>
-                1~{DATA.latestRound}회 · {DATA.totalRounds}회차 통계 기반
-              </p>
+              
             </div>
             <button onClick={() => doUpdate(status==="cached")} disabled={status==="loading"||status==="bg"} style={{ padding:"5px 10px", borderRadius:14, border:"1px solid rgba(99,102,241,0.3)", background:"rgba(99,102,241,0.15)", color:"#818CF8", fontSize:10, fontWeight:700, cursor:(status==="loading"||status==="bg")?"wait":"pointer", fontFamily:"inherit", display:"flex", alignItems:"center", gap:3 }}>
               <span style={{ display:"inline-block", animation:(status==="loading"||status==="bg")?"spin 1s linear infinite":"none", fontSize:12 }}>🔄</span>
