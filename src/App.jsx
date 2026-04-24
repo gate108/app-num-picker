@@ -320,7 +320,8 @@ export default function App() {
   const [editing, setEditing]  = useState(null); // 수정 중인 회차 번호
   const [manualRounds, setManualRounds] = useState([]);
   const [adminToken, setAdminToken]     = useState(() => { try { return localStorage.getItem('lotto_admin_token') || ''; } catch { return ''; } });
-  const isAdmin = adminToken !== '' || new URLSearchParams(window.location.search).has('admin');
+  const [isAdmin, setIsAdmin]           = useState(() => { try { return !!localStorage.getItem('lotto_admin_token'); } catch { return false; } });
+  const recentClickRef                  = useRef({ count: 0, timer: null });
 
   function saveToken(t) {
     setAdminToken(t);
@@ -491,7 +492,19 @@ export default function App() {
 
           <div style={{ display:"flex", gap:2 }}>
             {TABS.map(t => (
-              <button key={t.id} onClick={() => setTab(t.id)} style={{ flex:1, padding:"7px 2px", borderRadius:6, border:"none", background:tab===t.id?"rgba(245,158,11,0.15)":"transparent", color:tab===t.id?"#F59E0B":"#6B7280", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit", borderBottom:tab===t.id?"2px solid #F59E0B":"2px solid transparent", lineHeight:1.3, WebkitTapHighlightColor:"transparent" }}>
+              <button key={t.id} onClick={() => {
+                setTab(t.id);
+                if (t.id === "recent") {
+                  recentClickRef.current.count++;
+                  clearTimeout(recentClickRef.current.timer);
+                  if (recentClickRef.current.count >= 3) {
+                    setIsAdmin(p => !p);
+                    recentClickRef.current.count = 0;
+                  } else {
+                    recentClickRef.current.timer = setTimeout(() => { recentClickRef.current.count = 0; }, 800);
+                  }
+                }
+              }} style={{ flex:1, padding:"7px 2px", borderRadius:6, border:"none", background:tab===t.id?"rgba(245,158,11,0.15)":"transparent", color:tab===t.id?"#F59E0B":"#6B7280", fontSize:11, fontWeight:700, cursor:"pointer", fontFamily:"inherit", borderBottom:tab===t.id?"2px solid #F59E0B":"2px solid transparent", lineHeight:1.3, WebkitTapHighlightColor:"transparent" }}>
                 <span style={{ fontSize:13 }}>{t.i}</span><br />{t.l}
               </button>
             ))}
