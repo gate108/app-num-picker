@@ -156,6 +156,34 @@ function mergeRecent(base, freshRounds) {
   };
 }
 
+// ── 광고 배너 컴포넌트 ──
+// data-ad-slot: AdSense에서 광고 단위 생성 후 슬롯 ID로 교체하세요
+const AD_CLIENT = "ca-pub-6843910277588116";
+const AD_SLOT   = "9569659445";
+
+function AdBanner() {
+  const ref = useRef(null);
+  useEffect(() => {
+    if (!ref.current || ref.current.dataset.pushed) return;
+    try {
+      (window.adsbygoogle = window.adsbygoogle || []).push({});
+      ref.current.dataset.pushed = "1";
+    } catch {}
+  }, []);
+  return (
+    <div style={{ margin:"8px 0", textAlign:"center", minHeight:100, background:"rgba(31,41,55,0.3)", borderRadius:10, overflow:"hidden" }}>
+      <ins ref={ref}
+        className="adsbygoogle"
+        style={{ display:"block" }}
+        data-ad-client={AD_CLIENT}
+        data-ad-slot={AD_SLOT}
+        data-ad-format="auto"
+        data-full-width-responsive="true"
+      />
+    </div>
+  );
+}
+
 // ── UI 컴포넌트 ──
 const BC = n => {
   if (n<=10) return {bg:"#FCD34D",t:"#92400E",g:"#FDE68A"};
@@ -523,6 +551,8 @@ export default function App() {
             </div>
           </div>
 
+          <AdBanner />
+
           {saved.length>0 && <div style={{ ...C, border:"1px solid rgba(16,185,129,0.2)" }}>
             <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:8 }}>
               <span style={{ fontSize:12, fontWeight:700, color:"#10B981" }}>💾 저장됨 ({saved.length})</span>
@@ -547,6 +577,7 @@ export default function App() {
           <div style={{ display:"flex", flexDirection:"column", gap:1 }}>
             {fd.map(d=><FreqBar key={d.num} num={d.num} value={d.value} max={mx} sel={sel.includes(d.num)} onClick={()=>toggle(d.num)}/>)}
           </div>
+          <AdBanner />
         </div>}
 
         {/* ── 동반 출현 ── */}
@@ -572,10 +603,12 @@ export default function App() {
               </div>)}
             </div>
           </div>
+          <AdBanner />
         </div>}
 
         {/* ── 최근 당첨 ── */}
         {tab==="recent" && <div style={C}>
+          <AdBanner />
           <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:10 }}>
             <span style={{ fontSize:13, fontWeight:700 }}>📋 최근 당첨 번호</span>
             {DATA.recentRounds[0]?.date && <span style={{ fontSize:10, color:"#6B7280" }}>{DATA.recentRounds[0].date} 기준</span>}
