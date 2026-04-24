@@ -320,6 +320,7 @@ export default function App() {
   const [editing, setEditing]  = useState(null); // 수정 중인 회차 번호
   const [manualRounds, setManualRounds] = useState([]);
   const [adminToken, setAdminToken]     = useState(() => { try { return localStorage.getItem('lotto_admin_token') || ''; } catch { return ''; } });
+  const isAdmin = adminToken !== '' || new URLSearchParams(window.location.search).has('admin');
 
   function saveToken(t) {
     setAdminToken(t);
@@ -614,8 +615,8 @@ export default function App() {
             {DATA.recentRounds[0]?.date && <span style={{ fontSize:10, color:"#6B7280" }}>{DATA.recentRounds[0].date} 기준</span>}
           </div>
 
-          {/* 수동 입력 폼 (서버 공유 저장) */}
-          <div style={{ padding:10, background:"#0F172A", borderRadius:8, marginBottom:10, border:"1px solid rgba(99,102,241,0.2)" }}>
+          {/* 수동 입력 폼 — 관리자 전용 */}
+          {isAdmin && <div style={{ padding:10, background:"#0F172A", borderRadius:8, marginBottom:10, border:"1px solid rgba(99,102,241,0.2)" }}>
             <div style={{ fontSize:11, fontWeight:700, color:"#818CF8", marginBottom:8 }}>
               {editing!=null ? `✏ ${editing}회 수정 중` : "✍ 새 회차 직접 입력"} <span style={{ fontSize:9, color:"#6B7280", fontWeight:500 }}>· 서버 공유 저장</span>
             </div>
@@ -649,14 +650,14 @@ export default function App() {
                 취소
               </button>}
             </div>
-          </div>
+          </div>}
           {DATA.recentRounds.map(r=>{
             const mc = r.n.filter(n=>sel.includes(n)).length;
             const isManual = manualRounds.some(x => x.r === r.r);
             const manualRd = isManual ? manualRounds.find(x => x.r === r.r) : null;
             return <div key={r.r} style={{ display:"flex", alignItems:"center", gap:6, padding:"7px 8px", background:"#0F172A", borderRadius:8, marginBottom:5, border:mc>=3?"1px solid rgba(245,158,11,0.3)":isManual?"1px solid rgba(129,140,248,0.25)":"1px solid transparent" }}>
               <div style={{ width:42, flexShrink:0, fontSize:12, fontWeight:800, color:"#F59E0B" }}>
-                {r.r}회{isManual && <span style={{ fontSize:8, color:"#818CF8", display:"block", lineHeight:1 }}>✍ 수동</span>}
+                {r.r}회{isManual && isAdmin && <span style={{ fontSize:8, color:"#818CF8", display:"block", lineHeight:1 }}>✍ 수동</span>}
               </div>
               <div style={{ display:"flex", gap:2, flexWrap:"wrap", flex:1, alignItems:"center" }}>
                 {r.n.map(n=><Ball key={n} num={n} mini sel={sel.includes(n)}/>)}
@@ -664,7 +665,7 @@ export default function App() {
                 <Ball num={r.b} mini bonus/>
               </div>
               {mc>0&&sel.length>0&&<span style={{ fontSize:9, fontWeight:700, padding:"2px 5px", borderRadius:6, flexShrink:0, background:mc>=3?"rgba(245,158,11,0.15)":"rgba(107,114,128,0.15)", color:mc>=3?"#F59E0B":"#6B7280" }}>{mc}개</span>}
-              {isManual && <div style={{ display:"flex", gap:2, flexShrink:0 }}>
+              {isManual && isAdmin && <div style={{ display:"flex", gap:2, flexShrink:0 }}>
                 <button onClick={()=>startEdit(manualRd)} disabled={mBusy} title="수정"
                   style={{ padding:"3px 6px", borderRadius:5, border:"1px solid #374151", background:"transparent", color:"#818CF8", fontSize:10, cursor:"pointer", fontFamily:"inherit" }}>✏</button>
                 <button onClick={()=>deleteManualRound(r.r)} disabled={mBusy} title="삭제"
